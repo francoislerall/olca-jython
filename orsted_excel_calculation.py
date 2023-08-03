@@ -33,7 +33,6 @@ from org.openlca.app.components import FileChooser, ModelSelector
 from org.openlca.core.results import UpstreamTree, UpstreamNode
 from org.openlca.core.matrix.index import TechFlow
 from org.openlca.core.model import ImpactCategory
-import string
 
 # dictionary with the row location of each impact category on the sheet 'LC stages_EF'
 STAGE_EF_ROWS = {
@@ -65,7 +64,7 @@ STAGE_EF_ROWS = {
     'Resource use, fossils': 26,
     'Resource use, minerals and metals': 27,
     'Water use': 28
-}
+}  # type: dict[str, int]
 
 
 def index_of(letter):  # type: (str) -> int
@@ -92,8 +91,8 @@ class Path:
 
 
 class UpstreamTreeSheet:
-    MAX_DEPTH = 5
-    MAX_RECURSION_DEPTH = 5
+    MAX_DEPTH = 4
+    MIN_CONTRIBUTION = 0.0
 
     def __init__(self, sheet, tree, impact_category):  # type: (Sheet, UpstreamTree, ImpactCategory) -> None
         self.sheet = sheet
@@ -106,7 +105,7 @@ class UpstreamTreeSheet:
         self.results = []
         self.direct = []
 
-    def write_sheet(self):
+    def write_sheet(self):  # type: () -> None
         self.create_header()
 
         # write the tree
@@ -122,15 +121,18 @@ class UpstreamTreeSheet:
 
         node = path.node
         result = path.node.result()
-
         if result == 0:
             return
-        if path.length > self.MAX_DEPTH:
-            return
-        if path.count(node.provider()) > self.MAX_RECURSION_DEPTH:
-            return
+        if self.total_result != 0:
+            c = abs(result / self.total_result)
+            if c < self.MIN_CONTRIBUTION:
+                return
 
         self.write(path)
+
+        if path.length > self.MAX_DEPTH - 1:
+            return
+
         for child in self.tree.childs(node):
             self.traverse(path.append(child))
 
@@ -145,7 +147,7 @@ class UpstreamTreeSheet:
             return
         Excel.cell(self.sheet, self.row_index, col_index, node.provider().provider().name)
 
-    def create_header(self):
+    def create_header(self):  # type: () -> None
         workbook = self.sheet.getWorkbook()
         Excel.cell(self.sheet, 0, index_of("A"), 'Upstream contributions to: %s' % self.impact_category.name)
         Excel.bold(workbook, self.sheet, 0, 0)
@@ -162,9 +164,10 @@ class UpstreamTreeSheet:
 
 class Lco2Modeler:
 
-    def __init__(self, source, system_id, warning=True):  # type: (XSSFWorkbook, str, bool) -> None
+    def __init__(self, source, target, system_id, warning=True):
+        # type: (XSSFWorkbook, XSSFWorkbook, str, bool) -> None
         self.source = source
-        self.target = XSSFWorkbook()
+        self.target = target
         self.system_id = system_id
         self.warning = warning
 
@@ -173,7 +176,7 @@ class Lco2Modeler:
         self.results = None
 
     @staticmethod
-    def get_esg_system(system_id):
+    def get_esg_system(system_id):  # type: (str) -> Optional[ProductSystem]
         """Get the ESG product system associated with the product system whose uuid was provided as an argument to this
         function."""
         selected_product_system = db.get(ProductSystem, system_id)
@@ -185,7 +188,7 @@ class Lco2Modeler:
             if product_system.name.startswith(esg_name):
                 return product_system
 
-    def get_and_write_contribution_tree(self):
+    def get_and_write_contribution_tree(self):  # type: () -> None
         """This function will return the contribution tree of the results object calculated using the impact method
         'EF 3.0 Method (adapted)' with the function above. It will also write the contribution tree to a new tab in
         the Excel file whose path was provided in the constructor."""
@@ -200,12 +203,13 @@ class Lco2Modeler:
         # iterate over impact categories in impact method
         for i, impact_category in enumerate(impact_categories, 1):
             self.create_upstream_sheet(i, impact_category, results)
+
         print('The upstream trees were written to excel file.')
 
-    def write_impact_calculation_results(self):
+    def write_impact_calculation_results(self):  # type: () -> None
         sheet = self.target.getSheet('LC stages_EF')
-        results = self.get_result_no_arg()
-        results_per_category_list = self.get_result_per_category(results)
+        result = self.get_result_no_arg()
+        result_per_category_list = self.get_result_per_category(result)
 
         # dictionary with the column location of each sub-process on the sheet 'LC stages_EF'
         columns = {
@@ -218,10 +222,10 @@ class Lco2Modeler:
             'Site investigation': index_of('B')
         }
 
-        self.write_results(sheet, results_per_category_list, STAGE_EF_ROWS, columns)
+        self.write_results(sheet, result_per_category_list, STAGE_EF_ROWS, columns)
         print("Impact calculations have been written to the excel file.")
 
-    def write_main_components_results(self):
+    def write_main_components_results(self):  # type: () -> None
         """This function will write the contributions of the main components to the Excel file."""
         sheet = self.target.getSheet('CO2 eq. distribution')
 
@@ -251,7 +255,7 @@ class Lco2Modeler:
         XSSFFormulaEvaluator.evaluateAllFormulaCells(self.target)
         print("Impact calculations for the main components have been written to the excel file.")
 
-    def write_esg_impact_calculation_results(self):
+    def write_esg_impact_calculation_results(self):  # type: () -> None
         """This function will write the ESG calculation results using the impact method 'EF 3.0 Method (adapted)' to
         the Excel file."""
         sheet = self.target.getSheet('LC stages_EF ESG')
@@ -275,7 +279,7 @@ class Lco2Modeler:
 
         print("Impact calculations for the ESG have been written to the excel file.")
 
-    def write_cumulative_energy_demand_results(self):
+    def write_cumulative_energy_demand_results(self):  # type: () -> None
         """This function will write the calculation results using the impact method 'Cumulative Energy Demand' to the
         Excel file."""
         sheet = self.target.getSheet('Energy factors')
@@ -303,25 +307,27 @@ class Lco2Modeler:
         XSSFFormulaEvaluator.evaluateAllFormulaCells(self.target)
         print("The cumulative energy demand has been written to excel file.")
 
-    def get_result_per_category(self, results):
-        results_per_category_list = []
+    def get_result_per_category(self, result):  # type: (LcaResult) -> List[dict[str, Any]]
+        results_per_category_list = []  # type: List[dict[str, Any]]
         for impact_category in self.impact_method.impactCategories:
             # build upstream contribution tree
-            tree = UpstreamTree.of(results.provider(), Descriptor.of(impact_category))
+            tree = UpstreamTree.of(result.provider(), Descriptor.of(impact_category))
             for child in tree.childs(tree.root):
                 results_per_category_list.append(self.get_info(child, impact_category))
         return results_per_category_list
 
     def write_results(self, sheet, results_per_category_list, rows, columns):
+        # type: (Sheet, List[dict[str, Any]], dict[str, int], dict[str, int]) -> None
         # iterate over results of impact categories and write them to the workbook
         for result_per_category in results_per_category_list:
-            category = result_per_category['impact_category']
-            name = result_per_category['name']
-            result = result_per_category['result']
+
+            category = result_per_category['impact_category']  # type: str
+            name = result_per_category['name']  # type: str
+            result = result_per_category['result']  # type: float
             if category in rows and name in columns:
                 row_index = rows[category]
                 column = columns[name]
-                Excel.cell(sheet, row_index, index_of(column), result)
+                Excel.cell(sheet, row_index, column, result)
 
         # evaluate all formulas in the workbook
         XSSFFormulaEvaluator.evaluateAllFormulaCells(self.target)
@@ -346,8 +352,7 @@ class Lco2Modeler:
 
     @staticmethod
     def get_info(child, impact_category):  # type: (UpstreamNode, ImpactCategory) -> dict[str, Any]
-        # put all process names, results, impact categories and impact unit in a dictionary and save each of
-        # these dictionaries in a master list
+        # put all process names, results, impact categories and impact unit in a dictionary
         _name = child.provider().provider().name
         name = _name if not _name.endswith(' (float)') else _name.replace(' (float)', '')
 
@@ -358,21 +363,15 @@ class Lco2Modeler:
             'impact_unit': impact_category.referenceUnit
         }
 
-        print("For the impact category '%s' in '%s' the impact is %f %s" % (
-            child_dict['impact_category'],
-            child_dict['name'],
-            child_dict['result'],
-            child_dict['impact_unit']
-        ))
         return child_dict
 
     def delete_upstream_sheet(self):
         # delete existing 'Upstream tree' sheet if present
-        sheet_names = [sheet.getSheetName() for sheet in self.source.sheetIterator()]
+        sheet_names = [sheet.getSheetName() for sheet in self.target.sheetIterator()]
         for sheet_name in sheet_names:
             if 'Upstream tree' in sheet_name:
                 sheet_id = sheet_names.index(sheet_name)
-                self.source.removeSheetAt(sheet_id)
+                self.target.removeSheetAt(sheet_id)
 
     def create_index_sheet(self, impact_categories):
         """
@@ -380,13 +379,13 @@ class Lco2Modeler:
         for the sheet names. Therefore, we cannot use the impact category names as the sheet names, and instead we are
         using a numeric system for the sheet names that can be navigated using this index sheet.
         """
-        sheet = self.source.createSheet('Upstream tree sheet index')
+        sheet = self.target.createSheet('Upstream tree sheet index')
 
         Excel.cell(sheet, 0, 0, "Sheet Name")
-        Excel.bold(self.source, sheet, 0, 0)
+        Excel.bold(self.target, sheet, 0, 0)
 
         Excel.cell(sheet, 0, 1, "Impact Category")
-        Excel.bold(self.source, sheet, 0, 1)
+        Excel.bold(self.target, sheet, 0, 1)
 
         # iterate and write index to index sheet
         for i, impact_category in enumerate(impact_categories, 1):
@@ -396,7 +395,7 @@ class Lco2Modeler:
         for index_column in range(2):
             sheet.autoSizeColumn(index_column)
 
-    def run_impact_calculation(self, ef3_method=True, use_esg_system=False):
+    def run_impact_calculation(self, ef3_method=True, use_esg_system=False):  # type: (bool, bool) -> LcaResult
         """This function runs an impact calculation based on the product system and impact method whose uuid has been provided. If you set the parameter 'ef3_method' to True, the impact method 'EF 3.0 (adapted)' will be used to run the impact calculation.
         If you set this parameter to False, the impact method 'Cumulative Energy Demand' will be used. If you want to use the 'normal' product system to make the calculations, leave the parameter 'use_esg_product_system' on False. If however, you wish to
         make the calculation with the ESG equivalent, select 'use_esg_product_system' to True. A results object will be returned."""
@@ -465,7 +464,6 @@ class Lco2Modeler:
         for parameter in parameter_set.parameters:
             if parameter.name == name:
                 parameter.value = modified_value
-                print("The parameter '%s' was updated to %f" % (parameter.name, modified_value))
 
     def get_headers(self, sheet):
         column_position_dict = {}
@@ -519,8 +517,13 @@ def main():
     source_path = file.getAbsolutePath()
     source_fis = FileInputStream(source_path)
     source = XSSFWorkbook(source_fis)
+    source_fis.close()
 
-    l2m = Lco2Modeler(source, system_id)
+    target_fis = FileInputStream(source_path)
+    target = XSSFWorkbook(target_fis)
+    target_fis.close()
+
+    l2m = Lco2Modeler(source, target, system_id)
     l2m.get_and_write_contribution_tree()
     l2m.write_impact_calculation_results()
     l2m.write_main_components_results()
@@ -532,7 +535,7 @@ def main():
     l2m.write(target_path)
 
     source.close()
-    source_fis.close()
+    target.close()
 
     print("Updated the entire Excel file on path '%s'." % target_path)
 
