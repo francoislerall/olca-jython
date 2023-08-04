@@ -68,10 +68,12 @@ STAGE_EF_ROWS = {
 
 
 def index_of(letter):  # type: (str) -> int
+    """Return 1 for A, 2 for B, etc."""
     return ord(letter) - 65
 
 
 def letter_of(index):  # type: (int) -> str
+    """Return A for 1, B for 2, etc."""
     return chr(ord('@') + index + 1)
 
 
@@ -82,22 +84,11 @@ def context_of(param):  # type: ('ParameterRedef') -> str
     return "global"
 
 
-class Path:
-
-    def __init__(self, node, prefix=None):  # type: (UpstreamNode, Path) -> None
-        self.prefix = prefix
-        self.node = node
-        self.length = 0 if prefix is None else 1 + prefix.length
-
-    def append(self, node):  # type: (UpstreamNode) -> Path
-        return Path(node, self)
-
-    def count(self, tech_flow):  # type: (TechFlow) -> int
-        c = 1 if tech_flow == self.node.provider() else 0
-        return c + self.prefix.count(tech_flow) if self.prefix is not None else c
-
-
 class UpstreamTreeSheet:
+    """
+    UpstreamTreeSheet allows to write the impact tree of a process on an input Sheet [1].
+    [1]: https://github.com/GreenDelta/olca-app/blob/master/olca-app/src/org/openlca/app/results/contributions/UpstreamTreeExport.java for more details. # noqa
+    """
     MAX_DEPTH = 4
     MIN_CONTRIBUTION = 0.0
 
@@ -106,18 +97,15 @@ class UpstreamTreeSheet:
         self.tree = tree
         self.impact_category = impact_category
 
-        self.total_result = None
-        self.max_column = None
-        self.row_index = None
-        self.results = []
+        self.total_result = self.tree.root.result()
+        self.max_column = 0  # type: int
+        self.row_index = 1  # type: int
+        self.results = []  # type: list[float]
 
     def write_sheet(self):  # type: () -> None
         self.create_header()
 
         # write the tree
-        self.row_index = 1
-        self.max_column = 0
-        self.total_result = self.tree.root.result()
         path = Path(self.tree.root)
         self.traverse(path)
 
@@ -129,6 +117,7 @@ class UpstreamTreeSheet:
             Excel.cell(self.sheet, i + 2, self.max_column + 2, percentage)
 
     def traverse(self, path):  # type: (Path) -> None
+        """Depth first traversal of the impact tree to write the process names in a tree formation on the Sheet."""
         if self.row_index >= 1048574:  # is the maximum row number of an Excel sheet.
             return
 
@@ -143,6 +132,7 @@ class UpstreamTreeSheet:
 
         self.write(path)
 
+        # checking the depth before getting the node children as it might not be necessary.
         if path.length > self.MAX_DEPTH - 1:
             return
 
@@ -174,10 +164,34 @@ class UpstreamTreeSheet:
         Excel.bold(workbook, self.sheet, 1, index_of("G"))
 
 
+class Path:
+
+    def __init__(self, node, prefix=None):  # type: (UpstreamNode, Path) -> None
+        """
+        Path represents a path in the impact tree from the root.
+
+       @param node: the extremity of the path.
+       @param prefix: the path of the parent of node.
+       """
+        self.prefix = prefix
+        self.node = node
+        self.length = 0 if prefix is None else 1 + prefix.length
+
+    def append(self, node):  # type: (UpstreamNode) -> Path
+        """Return a path extended by the input node."""
+        return Path(node, self)
+
+
 class Lco2Modeler:
 
     def __init__(self, source, target, system_id, warning=True):
         # type: (XSSFWorkbook, XSSFWorkbook, str, bool) -> None
+        """
+        @param source: Workbook to read from.
+        @param target: Workbook to write on.
+        @param system_id: UUID of the product system.
+        @param warning: verbose parameter.
+        """
         self.source = source
         self.target = target
         self.warning = warning
@@ -190,8 +204,10 @@ class Lco2Modeler:
 
     @staticmethod
     def get_esg_system(system_id):  # type: (str) -> 'ProductSystem'
-        """Get the ESG product system associated with the product system whose uuid was provided as an argument to this
-        function."""
+        """
+        Get the ESG product system associated with the product system whose uuid was provided as an argument to this
+        function.
+        """
         selected_product_system = db.get(ProductSystem, system_id)
         split_name = selected_product_system.name.split()
         split_name.pop()
@@ -202,6 +218,10 @@ class Lco2Modeler:
                 return product_system
 
     def set_systems_parameters(self):  # type: () -> None
+        """
+        Set the parameters (global or contextual of the two product systems by reading the parameters from the
+        source workbook.
+        """
         new_params = self.parse_workbook_parameters()
         for system in [self.system, self.esg_system]:
             self.set_system_parameters(system, new_params)
@@ -210,19 +230,20 @@ class Lco2Modeler:
     def set_system_parameters(system, new_params):  # type: ('ProductSystem', dict[tuple[str, str], float]) -> None
         if not system.parameterSets:
             return
-        print(new_params)
         for parameter_set in system.parameterSets:
             for param in parameter_set.parameters:
                 modified_value = new_params.get((param.name, context_of(param)))
-                print("updating " + param.name + " context: " + context_of(param) + " value: " + str(modified_value))
+                print("Updating {param} (context: {context}, value: {value})."
+                      .format(param=param.name, context=context_of(param), value=modified_value))
                 if modified_value is not None:
                     param.value = modified_value
         db.update(system)
 
     def get_and_write_contribution_tree(self):  # type: () -> None
-        """This function will return the contribution tree of the results object calculated using the impact method
-        'EF 3.0 Method (adapted)' with the function above. It will also write the contribution tree to a new tab in
-        the Excel file whose path was provided in the constructor."""
+        """
+        This function will write the contribution tree of the results object calculated using the impact method
+        'EF 3.0 Method (adapted)' in a new tab on the target workbook.
+        """
 
         results = self.get_result_no_arg()
 
@@ -233,7 +254,7 @@ class Lco2Modeler:
 
         # iterate over impact categories in impact method
         for i, impact_category in enumerate(impact_categories, 1):
-            self.create_upstream_sheet(i, impact_category, results)
+            self.write_upstream_sheet(i, impact_category, results)
 
         print('The upstream trees were written to excel file.')
 
@@ -257,7 +278,6 @@ class Lco2Modeler:
         print("Impact calculations have been written to the excel file.")
 
     def write_main_components_results(self):  # type: () -> None
-        """This function will write the contributions of the main components to the Excel file."""
         sheet = self.target.getSheet('CO2 eq. distribution')
 
         results = self.get_result_no_arg()
@@ -287,8 +307,6 @@ class Lco2Modeler:
         print("Impact calculations for the main components have been written to the excel file.")
 
     def write_esg_impact_calculation_results(self):  # type: () -> None
-        """This function will write the ESG calculation results using the impact method 'EF 3.0 Method (adapted)' to
-        the Excel file."""
         sheet = self.target.getSheet('LC stages_EF ESG')
 
         # run impact calculations
@@ -311,8 +329,6 @@ class Lco2Modeler:
         print("Impact calculations for the ESG have been written to the excel file.")
 
     def write_cumulative_energy_demand_results(self):  # type: () -> None
-        """This function will write the calculation results using the impact method 'Cumulative Energy Demand' to the
-        Excel file."""
         sheet = self.target.getSheet('Energy factors')
 
         # run impact calculations for cumulative energy demand and save the results in a dictionary
@@ -339,6 +355,10 @@ class Lco2Modeler:
         print("The cumulative energy demand has been written to excel file.")
 
     def get_result_per_category(self, result):  # type: ('LcaResult') -> list[dict[str, 'Any']]
+        """
+        Get results form the first level of the upstream tree and store them in a dictionary.
+        @return: A dict containing the name, the result, the impact category and the impact unit.
+        """
         results_per_category_list = []  # type: list[dict[str, 'Any']]
         for impact_category in self.ef3_method.impactCategories:
             # build upstream contribution tree
@@ -349,6 +369,9 @@ class Lco2Modeler:
 
     def write_results(self, sheet, results_per_category_list, rows, columns):
         # type: ('Sheet', list[dict[str, 'Any']], dict[str, int], dict[str, int]) -> None
+        """
+        Write results of a specific category into the input Sheet where the row and column names are defined in dicts.
+        """
         # iterate over results of impact categories and write them to the workbook
         for result_per_category in results_per_category_list:
 
@@ -365,6 +388,10 @@ class Lco2Modeler:
 
     @staticmethod
     def get_results_of(tree):  # type: (UpstreamTree) -> dict[str, float]
+        """
+        Return the result from the first and second level of the upstream tree. This function also takes care of
+        renaming of the processes containing float/floating.
+        """
         results = {}
         for child in tree.childs(tree.root):
             for grand_child in tree.childs(child):
@@ -377,6 +404,10 @@ class Lco2Modeler:
         return results
 
     def get_result_no_arg(self):  # type: () -> 'LcaResult'
+        """
+        Lazily calculate the result for the given product system and EF 3.0 (adapted) and store it to avoid running
+        multiple times the same calculation.
+        """
         if self.results is None:
             self.results = self.run_impact_calculation()
         return self.results
@@ -406,7 +437,7 @@ class Lco2Modeler:
 
     def create_index_sheet(self, impact_categories):  # type: (list[ImpactCategory]) -> None
         """
-        create an index sheet for the contribution tree sheets. The reason for this is that Excel has a character limit
+        Creates an index sheet for the contribution tree sheets. The reason for this is that Excel has a character limit
         for the sheet names. Therefore, we cannot use the impact category names as the sheet names, and instead we are
         using a numeric system for the sheet names that can be navigated using this index sheet.
         """
@@ -456,8 +487,10 @@ class Lco2Modeler:
         return calculator.calculate(setup)
 
     def parse_workbook_parameters(self):  # type: () -> dict[tuple[str, str], float]
-        """This function will update the parameters in the parameter set of the product system based on the provided
-        Excel file and return that updated parameter set."""
+        """
+        This function will read the parameters and their context from the source workbook and store them in a dict.
+        @return: A dict defined as {(name, context): value, ...}
+        """
         parameters = {}
 
         # get 'Parameters check' sheet
@@ -474,6 +507,13 @@ class Lco2Modeler:
 
     def parse_parameter(self, sheet, row_index, columns):
         # type: ('Sheet', int, dict[str, int], 'ParameterRedefSet') -> dict[tuple[str, str], float]
+        """
+        Return the parameter definition from a row.
+        @param sheet: the parameter sheet
+        @param row_index: the row containing a parameter
+        @param columns: a dict where the columns' name are defined
+        @return: a single value dict in a form: {(name, context): value}
+        """
         column_index = columns['Parameter']
         name_cell = Excel.cell(sheet, row_index, column_index)
         modified_value_cell = Excel.cell(sheet, row_index, columns['Modified value'])
@@ -497,6 +537,9 @@ class Lco2Modeler:
             print("Fail to parse {column}{row} parameter.".format(column=letter_of(column_index), row=row_index))
 
     def get_headers(self, sheet):  # type: ('Sheet') -> dict[str, int]
+        """
+        Return the dictionary with the first content of the first row cells (should be only Strings).
+        """
         column_position_dict = {}
         header_row = Excel.row(sheet, 0)
         for column_index in range(header_row.lastCellNum + 1):
@@ -508,8 +551,11 @@ class Lco2Modeler:
                 print('Cell {column}{row} does not exist!'.format(column=column, row=1))
         return column_position_dict
 
-    def create_upstream_sheet(self, index, impact_category, results):
+    def write_upstream_sheet(self, index, impact_category, results):
         # type: (int, ImpactCategory, 'LcaResult') -> None
+        """
+        Write the upstream tree of the corresponding impact category.
+        """
         sheet_name = "Upstream tree %i" % index
         print('Creating {sheet_name}.'.format(sheet_name=sheet_name))
         sheet = self.target.createSheet(sheet_name)
@@ -530,8 +576,10 @@ class Lco2Modeler:
 
 
 def main():  # type: () -> None
-    """This function will execute all the functions in the class 'Lco2Modeler' sequentially. Dialog windows will
-    guide the user through the selection of the appropriate Excel file, impact method and impact category."""
+    """
+    This function will execute all the functions in the class 'Lco2Modeler' sequentially. Dialog windows will
+    guide the user through the selection of the appropriate Excel file, impact method and impact category.
+    """
 
     # Select the Excel template file
     file = FileChooser.open('*.xlsx')
