@@ -276,11 +276,11 @@ class Lco2Modeler:
             if not name_cell.isPresent() or name_cell.get() is None:
                 continue
             name = name_cell.get().getStringCellValue()
-            if name in climate_change_results_dict:
-                value_cell = Excel.cell(sheet, i, 1)
-                if not value_cell.isPresent() or value_cell.get() is None:
-                    continue
-                value_cell.get().setCellValue(climate_change_results_dict[name])
+            value_cell = Excel.cell(sheet, i, 1)
+            if not value_cell.isPresent() or value_cell.get() is None:
+                continue
+            value = climate_change_results_dict[name] if name in climate_change_results_dict else 0.0
+            value_cell.get().setCellValue(value)
 
         # evaluate all formulas in the workbook
         XSSFFormulaEvaluator.evaluateAllFormulaCells(self.target)
