@@ -532,7 +532,7 @@ class Lco2Modeler:
             value = modified_value_cell.get().getNumericCellValue()
             context = context_value_cell.get().getStringCellValue()
             # avoid encoding issue by wrapping with str()
-            return {(str(name), str(context)): value}
+            return {(str(name.strip()), str(context.strip())): value}
         except RuntimeException:
             print("Fail to parse {column}{row} parameter.".format(column=letter_of(column_index), row=row_index))
 
